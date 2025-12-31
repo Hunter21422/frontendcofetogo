@@ -1,8 +1,8 @@
-// src/api.js — окончательная чистая версия с logout
+// src/api.js — финальная версия для Telegram Mini App
 import axios from "axios";
 
-// Базовый URL без завершающего слеша
-const API_BASE = process.env.VUE_APP_API_BASE || "http://127.0.0.1:8000";
+// Базовый URL backend (замени на свой, если нужно)
+const API_BASE = process.env.VUE_APP_API_BASE || "https://backendloyalitysystem.onrender.com";
 
 // Основной экземпляр axios — baseURL уже включает /api/
 export const api = axios.create({
@@ -10,16 +10,24 @@ export const api = axios.create({
   withCredentials: false,
 });
 
-// === Интерцептор запросов: добавляем Bearer токен ===
+// === Интерцептор запросов: добавляем Bearer токен + Telegram initData ===
 api.interceptors.request.use((config) => {
+  // Пропускаем авторизацию для запросов с флагом __noAuth
   if (config.__noAuth) {
     delete config.headers.Authorization;
     return config;
   }
 
+  // Добавляем JWT токен
   const token = localStorage.getItem("access");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+
+  // Добавляем Telegram initData (если есть) — для валидации на backend
+  const tgInitData = localStorage.getItem("tg_init_data");
+  if (tgInitData) {
+    config.headers["X-Telegram-Init-Data"] = tgInitData;
   }
 
   return config;
@@ -105,6 +113,13 @@ export const loginBaristaOld = (payload) =>
 
 export const getMe = () => api.get("me/");
 
+// Автоматическая аутентификация через Telegram (рекомендую добавить на backend)
+export const telegramAuth = () => {
+  const initData = localStorage.getItem("tg_init_data");
+  if (!initData) return Promise.reject("No Telegram initData");
+  return api.post("auth/telegram/", { init_data: initData }, { __noAuth: true });
+};
+
 // ==========================
 // ===       ПРОФИЛЬ      ===
 // ==========================
@@ -128,7 +143,6 @@ export const generateLoyaltyCode = () =>
 export const redeemLoyaltyCode = ({ code }) =>
   api.post("loyalty/redeem-code/", { code });
 
-// ИСПРАВЛЕНО: убрали лишний /api/
 export const checkLoyaltyCode = ({ code }) =>
   api.post("loyalty/check-code/", { code });
 
@@ -161,9 +175,11 @@ export const changePassword = (payload) =>
 export const logout = () => {
   localStorage.removeItem("access");
   localStorage.removeItem("refresh");
+  localStorage.removeItem("tg_init_data"); // Очищаем Telegram данные
   localStorage.removeItem("user_type");
-  localStorage.removeItem("view_mode"); // если используешь режимы
+  localStorage.removeItem("view_mode");
 
+  // Редирект на логин, если не там
   if (window.location.pathname !== "/login") {
     window.location.href = "/login";
   }
