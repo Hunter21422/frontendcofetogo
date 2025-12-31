@@ -1,6 +1,31 @@
 <template>
   <div class="auth-container">
-    <div class="auth-card glass-card">
+    <!-- БЛОК ДЛЯ TELEGRAM MINI APP: Автоматический вход -->
+    <div v-if="isTelegram" class="telegram-auto-login">
+      <div class="auto-login-card glass-card">
+        <div class="welcome-icon">
+          <i class="icon-coffee-large"></i>
+        </div>
+        <h2>Добро пожаловать!</h2>
+        <p class="welcome-text">Вы вошли через Telegram как:</p>
+
+        <div class="tg-user-info" v-if="tgUser">
+          <div class="tg-avatar">
+            {{ tgUser.first_name?.[0]?.toUpperCase() || 'U' }}
+          </div>
+          <div class="tg-details">
+            <strong>{{ tgUser.first_name }} {{ tgUser.last_name || '' }}</strong>
+            <span v-if="tgUser.username" class="tg-username">@{{ tgUser.username }}</span>
+          </div>
+        </div>
+
+        <p class="loading-text" v-if="loading">Загружаем ваш профиль лояльности...</p>
+        <p class="loading-text" v-else>Готово! Перенаправляем...</p>
+      </div>
+    </div>
+
+    <!-- ОБЫЧНАЯ ФОРМА ЛОГИНА: Только если НЕ в Telegram -->
+    <div v-else class="auth-card glass-card">
       <div class="auth-header">
         <div class="logo">
           <i class="icon-coffee"></i>
@@ -129,10 +154,15 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { loginJWT, loginBaristaJWT, logout } from "@/api";
-import { ensureUser } from "@/stores/auth"; // Добавляем импорт ensureUser для полной загрузки пользователя
+import { ensureUser } from "@/stores/auth";
+import { useTelegram } from "@/composables/useTelegram"; // ← Обязательно создай этот файл!
 
 const router = useRouter();
 
+// Telegram
+const { isTelegram, tgUser } = useTelegram();
+
+// Обычный логин
 const userType = ref("customer");
 const username = ref("");
 const password = ref("");
@@ -160,6 +190,7 @@ function clearError() {
   isCodeError.value = false;
 }
 
+// Обычный логин (только если НЕ в Telegram)
 async function submitLogin() {
   clearError();
   loading.value = true;
@@ -172,12 +203,12 @@ async function submitLogin() {
         username: username.value,
         password: password.value,
       });
-
       localStorage.setItem("user_type", "customer");
     } else {
       if (!employeeCode.value.trim()) {
         error.value = "Введите мастер-код сотрудника";
         isCodeError.value = true;
+        loading.value = false;
         return;
       }
 
@@ -186,34 +217,22 @@ async function submitLogin() {
         password: password.value,
         employee_code: employeeCode.value.trim(),
       });
-
       localStorage.setItem("user_type", "barista");
     }
 
-    // Сохраняем токены
     localStorage.setItem("access", response.data.access);
     if (response.data.refresh) {
       localStorage.setItem("refresh", response.data.refresh);
     }
 
-    // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Отправляем глобальное событие для обновления хедера
     window.dispatchEvent(new CustomEvent("auth-changed"));
-
-    // Дополнительно: Вызываем ensureUser для полной загрузки данных пользователя
     await ensureUser();
 
-    // Ждем немного, чтобы хедер успел обновиться (увеличили таймаут для надёжности)
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Теперь редиректим — хедер уже увидит авторизацию
-    if (userType.value === "barista") {
-      await router.push("/barista");
-    } else {
-      await router.push("/loyalty");
-    }
+    router.push(userType.value === "barista" ? "/barista" : "/loyalty");
   } catch (e) {
     console.error("Ошибка входа:", e);
-
     const msg = e.response?.data?.error || e.response?.data?.detail || e.message || "Ошибка входа";
 
     const lowerMsg = msg.toLowerCase();
@@ -223,8 +242,7 @@ async function submitLogin() {
       lowerMsg.includes("код") ||
       lowerMsg.includes("code") ||
       lowerMsg.includes("employee") ||
-      lowerMsg.includes("мастер") ||
-      lowerMsg.includes("master")
+      lowerMsg.includes("мастер")
     ) {
       isCodeError.value = true;
       error.value = "Неверный мастер-код сотрудника";
@@ -236,9 +254,25 @@ async function submitLogin() {
   }
 }
 
-// Очистка предыдущей сессии при заходе на страницу логина
-onMounted(() => {
-  logout(); // удаляет access, refresh, user_type
+// При монтировании
+onMounted(async () => {
+  // Очищаем старую сессию только если НЕ в Telegram
+  if (!isTelegram.value) {
+    logout();
+  }
+
+  // Если в Telegram — запускаем автоматический вход
+  if (isTelegram.value) {
+    loading.value = true;
+    await ensureUser();
+
+    const storedType = localStorage.getItem("user_type");
+    const target = storedType === "barista" ? "/barista" : "/loyalty";
+
+    setTimeout(() => {
+      router.push(target);
+    }, 800);
+  }
 });
 </script>
 
@@ -538,6 +572,79 @@ onMounted(() => {
   opacity: 0;
 }
 
+/* === НОВЫЕ СТИЛИ ДЛЯ TELEGRAM-БЛОКА === */
+.telegram-auto-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auto-login-card {
+  text-align: center;
+  padding: 48px 40px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.welcome-icon {
+  font-size: 64px;
+  margin-bottom: 24px;
+}
+
+.icon-coffee-large::before {
+  content: "☕";
+}
+
+.welcome-text {
+  color: #6b7280;
+  margin-bottom: 20px;
+  font-size: 16px;
+}
+
+.tg-user-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin: 24px 0;
+  padding: 16px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 16px;
+}
+
+.tg-avatar {
+  width: 60px;
+  height: 60px;
+  background: #6366f1;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.tg-details {
+  text-align: left;
+}
+
+.tg-username {
+  display: block;
+  color: #6366f1;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.loading-text {
+  color: #6366f1;
+  font-weight: 600;
+  margin-top: 20px;
+}
+
+/* === ИКОНКИ === */
 .icon-coffee::before { content: "☕"; }
 .icon-user::before { content: "👤"; }
 .icon-barista::before { content: "🎩"; }
@@ -549,6 +656,7 @@ onMounted(() => {
 .icon-error::before { content: "❌"; }
 .icon-warning::before { content: "⚠️"; }
 
+/* === ТЁМНАЯ ТЕМА === */
 @media (prefers-color-scheme: dark) {
   .auth-card {
     background: rgba(17, 24, 39, 0.95);
@@ -607,6 +715,7 @@ onMounted(() => {
   }
 }
 
+/* === АДАПТИВНОСТЬ === */
 @media (max-width: 640px) {
   .auth-card { padding: 32px 24px; }
   .auth-title { font-size: 28px; }
